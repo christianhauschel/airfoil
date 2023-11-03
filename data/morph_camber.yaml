@@ -1,0 +1,16 @@
+dir_out: "/mnt/a/code/airfoil/data"
+fname_airfoil: "/mnt/a/code/airfoil/data/af_mid.dat"
+# n_pts: 10
+n_pts: 4
+plots: true
+show_plots: false
+symmetric: false
+camber_only: true
+xmargin: 0.001
+ymargin_left: 0.05
+ymargin_right: 0.05
+x: 
+  # [0.01, 0.02, 0.02, 0.02, 0.01, 0.01, 0.02, -0.02, -0.02, -0.01, 0.01, 0.02, 0.02, 0.02, 0.01, 0.01, 0.02, -0.02, -0.02, -0.01]
+  [0.0, 0.05]
+
+  # lo   up    -    -    -    -
