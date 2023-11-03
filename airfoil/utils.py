@@ -64,7 +64,7 @@ def plot_airfoils(
 
 
 def interpolate_airfoils(
-    airfoils: list, plot_debug=False, kind=None
+    airfoils: list, span_int:np.ndarray, span:np.ndarray=None, plot_debug=False, kind=None
 ) -> list:
     """Interpolates between a list of airfoils.
 
@@ -90,7 +90,8 @@ def interpolate_airfoils(
     # for af in airfoils:
     #     af.plot()
     n = len(airfoils)
-    s = np.linspace(0, 1, n)
+    if span is None:
+        span = np.linspace(0, 1, n)
 
     # get max n from airfoils
     n_max = max(af.n for af in airfoils)
@@ -102,8 +103,7 @@ def interpolate_airfoils(
     # generate tensor (n x n_max x 2)
     data = np.array([af.data for af in airfoils])
 
-    n_int = 15
-    s_int = np.linspace(0, 1, n_int)
+    n_int = len(span_int)
 
     # interpolate data along dimension 0
 
@@ -123,10 +123,10 @@ def interpolate_airfoils(
         else:
             kind = "linear"
 
-        f0 = interp1d(s, data[:, i, 0], kind=kind)
-        f1 = interp1d(s, data[:, i, 1], kind=kind)
-        data_int[:, i, 0] = f0(s_int)
-        data_int[:, i, 1] = f1(s_int)
+        f0 = interp1d(span, data[:, i, 0], kind=kind)
+        f1 = interp1d(span, data[:, i, 1], kind=kind)
+        data_int[:, i, 0] = f0(span_int)
+        data_int[:, i, 1] = f1(span_int)
 
     if plot_debug:
         # 3d plot
@@ -136,13 +136,13 @@ def interpolate_airfoils(
         ax = fig.add_subplot(projection="3d")
 
         for i in range(n):
-            ax.plot(data[i, :, 0], data[i, :, 1], s[i] * np.ones(n_max), label=names[i])
+            ax.plot(data[i, :, 0], data[i, :, 1], span[i] * np.ones(n_max), label=names[i])
 
         for i in range(n_int):
             ax.plot(
                 data_int[i, :, 0],
                 data_int[i, :, 1],
-                s_int[i] * np.ones(n_max),
+                span_int[i] * np.ones(n_max),
                 c="k",
                 alpha=0.5,
                 lw=1,
