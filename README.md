@@ -19,7 +19,7 @@ Some parts of this software are borrowed and derived from [1]. These are copyrig
 ## Installation
 
 ```bash
-pip install git+https://github.zhaw.ch/hacs/airfoil
+pip install git+https://github.com/christianhauschel/airfoil.git
 ```
 
 
