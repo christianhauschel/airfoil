@@ -5,6 +5,7 @@
 import contextlib
 import itertools
 import numpy as np
+import pandas as pd
 
 try:
     import proplot as plt
@@ -119,6 +120,7 @@ class Airfoil:
             obj = load(f)
         return obj
 
+
     @classmethod
     def load_txt(
         cls,
@@ -151,6 +153,39 @@ class Airfoil:
                     name = str(f.readline().strip().replace("# ", "").replace("#", ""))
             else:
                 name = str(Path(fname).name)
+        return cls(data, name=name, order=order, spacing=spacing, **kwargs)
+    
+    @classmethod
+    def load_csv(
+        cls,
+        fname: str,
+        name: str = None,
+        skiprows: int = 0,
+        order: int = 1,
+        spacing: str = "cosine",
+        **kwargs,
+    ):
+        """
+        Loads an airfoil from a CSV file.
+
+        Parameters
+        ----------
+        fname: str
+        name: str, optional
+        skiprows: int, optional
+
+        Conventions
+        -----------
+        - The airfoil begins at TE and moves along the upper surface
+          counter-clockwise to the pressure side until it reaches again the TE.
+        """
+
+        df = pd.read_csv(fname, skiprows=skiprows)
+        x = df["x"].values
+        y = df["y"].values
+        data = np.c_[x, y]
+        name = df["name"].values[0]
+        
         return cls(data, name=name, order=order, spacing=spacing, **kwargs)
 
     @classmethod
@@ -275,6 +310,23 @@ class Airfoil:
     ):
         """Creates a NACA airfoil.
 
+        NACA4
+        -----
+        NACA MPXX
+            M: max. camber [%]
+            P: position of max. chamber / 10
+            XX: max. thickness [%]
+
+
+        NACA5
+        -----
+        NACA LPQXX
+            L: camber control (designed CL * 3/20)
+            P: position of max. chamber / 20
+            Q: 0 = normal camber line, 1 = reflex camber line
+            XX: max. thickness [%]
+
+
         Parameters
         ----------
         number : str
@@ -287,6 +339,11 @@ class Airfoil:
             _description_, by default False
         spacing : str, optional
             sampling type, by default "cosine"
+
+        # References
+        ------------
+        1. http://airfoiltools.com/airfoil/naca5digit
+        2. http://airfoiltools.com/airfoil/naca4digit#calculation
         """
         assert n % 2, "n must be odd!"
 
@@ -297,7 +354,8 @@ class Airfoil:
         else:
             x, y = naca5(number, n_lower, finite_TE, spacing, **kwargs)
 
-        return cls(np.c_[x * chord, y * chord], name=f"NACA {number}")
+        return cls(np.c_[x * chord, y * chord],  name=f"NACA{number}")
+ 
 
     @classmethod
     def ellipse(cls, a=0.5, b=0.5, n=241, name=None, spacing="cosine", **kwargs):
@@ -951,6 +1009,19 @@ class Airfoil:
             fname
         """
         np.savetxt(fname, self.data, header=self.name, comments="")
+
+    def save_csv(self, fname: str):
+        """Save airfoil data to disc.
+
+        Parameters
+        ----------
+        fname : str
+            fname
+        """
+
+        df = pd.DataFrame(self.data, columns=["x", "y"])
+        df["name"] = [self.name] * len(df)
+        df.to_csv(fname, index=False)
 
     def save_yaml(self, fname: str):
         """Save airfoil data to YAML.

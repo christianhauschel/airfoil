@@ -59,83 +59,153 @@ def naca4(number: str, n: int, finite_TE=False, spacing="cosine", **kwargs):
     return x, y
 
 
-def naca5(number: str, n: int, finite_TE=False, spacing="cosine", **kwargs):
-    """
-    Returns 2*n+1 points in [0 1] for the given 5 digit NACA number string.
+# def naca5(number: str, n: int, finite_TE=False, spacing="cosine", **kwargs):
+#     """
+#     Returns 2*n+1 points in [0 1] for the given 5 digit NACA number string.
 
-    References
-    ----------
-    https://github.com/dgorissen/naca
-    """
+#     References
+#     ----------
+#     https://github.com/dgorissen/naca
+#     """
 
-    naca1 = int(number[0])
-    naca23 = int(number[1:3])
-    naca45 = int(number[3:])
+#     naca1 = int(number[0])
+#     naca23 = int(number[1:3])
+#     naca45 = int(number[3:])
 
-    cld = naca1 * (3.0 / 2.0) / 10.0
-    p = 0.5 * naca23 / 100.0
-    t = naca45 / 100.0
+#     cld = naca1 * (3.0 / 2.0) / 10.0
+#     p = 0.5 * naca23 / 100.0
+#     t = naca45 / 100.0
 
-    a0 = +0.2969
-    a1 = -0.1260
-    a2 = -0.3516
-    a3 = +0.2843
+#     a0 = +0.2969
+#     a1 = -0.1260
+#     a2 = -0.3516
+#     a3 = +0.2843
 
-    a4 = -0.1015 if finite_TE else -0.1036
-    x = sampling(spacing, 0, 1, n + 1, **kwargs)
+#     a4 = -0.1015 if finite_TE else -0.1036
+#     x = sampling(spacing, 0, 1, n + 1, **kwargs)
 
-    yt = [
-        5
-        * t
-        * (a0 * np.sqrt(xx) + a1 * xx + a2 * xx**2 + a3 * xx**3 + a4 * xx**4)
-        for xx in x
-    ]
+#     yt = [
+#         5
+#         * t
+#         * (a0 * np.sqrt(xx) + a1 * xx + a2 * xx**2 + a3 * xx**3 + a4 * xx**4)
+#         for xx in x
+#     ]
 
-    P = [0.05, 0.1, 0.15, 0.2, 0.25]
-    M = [0.0580, 0.1260, 0.2025, 0.2900, 0.3910]
-    K = [361.4, 51.64, 15.957, 6.643, 3.230]
+#     P = [0.05, 0.1, 0.15, 0.2, 0.25]
+#     M = [0.0580, 0.1260, 0.2025, 0.2900, 0.3910]
+#     K = [361.4, 51.64, 15.957, 6.643, 3.230]
 
-    m = interpolate(P, M, [p])[0]
-    k1 = interpolate(M, K, [m])[0]
+#     m = interpolate(P, M, [p])[0]
+#     k1 = interpolate(M, K, [m])[0]
 
-    xc1 = [xx for xx in x if xx <= p]
-    xc2 = [xx for xx in x if xx > p]
-    xc = xc1 + xc2
+#     xc1 = [xx for xx in x if xx <= p]
+#     xc2 = [xx for xx in x if xx > p]
+#     xc = xc1 + xc2
 
-    if p == 0:
-        xu = x
-        yu = yt
+#     if p == 0:
+#         xu = x
+#         yu = yt
 
-        xl = x
-        yl = [-x for x in yt]
+#         xl = x
+#         yl = [-x for x in yt]
 
-        zc = [0] * len(xc)
+#         zc = [0] * len(xc)
+#     else:
+#         yc1 = [
+#             k1 / 6.0 * (xx**3 - 3 * m * xx**2 + m**2 * (3 - m) * xx) for xx in xc1
+#         ]
+#         yc2 = [k1 / 6.0 * m**3 * (1 - xx) for xx in xc2]
+#         zc = [cld / 0.3 * xx for xx in yc1 + yc2]
+
+#         dyc1_dx = [
+#             cld / 0.3 * (1.0 / 6.0) * k1 * (3 * xx * 2 - 6 * m * xx + m**2 * (3 - m))
+#             for xx in xc1
+#         ]
+#         dyc2_dx = [cld / 0.3 * (1.0 / 6.0) * k1 * m**3] * len(xc2)
+
+#         dyc_dx = dyc1_dx + dyc2_dx
+#         theta = [np.arctan(xx) for xx in dyc_dx]
+
+#         xu = [xx - yy * np.sin(zz) for xx, yy, zz in zip(x, yt, theta)]
+#         yu = [xx + yy * np.cos(zz) for xx, yy, zz in zip(zc, yt, theta)]
+
+#         xl = [xx + yy * np.sin(zz) for xx, yy, zz in zip(x, yt, theta)]
+#         yl = [xx - yy * np.cos(zz) for xx, yy, zz in zip(zc, yt, theta)]
+
+#     X = xu[::-1] + xl[1:]
+#     Z = yu[::-1] + yl[1:]
+
+#     return X, Z
+
+
+def naca5(number:str, n: int, finite_TE=False, spacing="cosine", **kwargs):
+
+    xx = np.zeros(n)
+    y_t = np.zeros(n)
+    y_c = np.zeros(n)
+    x = np.zeros(2 * n)
+    y = np.zeros(2 * n)
+
+    # TE point bunching parameter
+    an = 1.5
+
+    number = int(number)
+
+    n5 = number // 10000
+    n4 = (number - n5 * 10000) // 1000
+    n3 = (number - n5 * 10000 - n4 * 1000) // 100
+    n2 = (number - n5 * 10000 - n4 * 1000 - n3 * 100) // 10
+    n1 = number - n5 * 10000 - n4 * 1000 - n3 * 100 - n2 * 10
+
+    n543 = 100 * n5 + 10 * n4 + n3
+
+    if n543 == 210:
+        m, c = 0.0580, 361.4
+    elif n543 == 220:
+        m, c = 0.1260, 51.64
+    elif n543 == 230:
+        m, c = 0.2025, 15.957
+    elif n543 == 240:
+        m, c = 0.2900, 6.643
+    elif n543 == 250:
+        m, c = 0.3910, 3.230
     else:
-        yc1 = [
-            k1 / 6.0 * (xx**3 - 3 * m * xx**2 + m**2 * (3 - m) * xx) for xx in xc1
-        ]
-        yc2 = [k1 / 6.0 * m**3 * (1 - xx) for xx in xc2]
-        zc = [cld / 0.3 * xx for xx in yc1 + yc2]
+        print('Illegal 5-digit designation')
+        print('First three digits must be 210, 220, ... 250')
+        number = 0
+        return
 
-        dyc1_dx = [
-            cld / 0.3 * (1.0 / 6.0) * k1 * (3 * xx * 2 - 6 * m * xx + m**2 * (3 - m))
-            for xx in xc1
-        ]
-        dyc2_dx = [cld / 0.3 * (1.0 / 6.0) * k1 * m**3] * len(xc2)
+    t = (n2 * 10 + n1) / 100.0
+    anp = an + 1.0
 
-        dyc_dx = dyc1_dx + dyc2_dx
-        theta = [np.arctan(xx) for xx in dyc_dx]
+    for i in range(n):
+        frac = i / (n - 1)
+        if i == n - 1:
+            xx[i] = 1.0
+        else:
+            xx[i] = 1.0 - anp * frac * (1.0 - frac)**an - (1.0 - frac)**anp
 
-        xu = [xx - yy * np.sin(zz) for xx, yy, zz in zip(x, yt, theta)]
-        yu = [xx + yy * np.cos(zz) for xx, yy, zz in zip(zc, yt, theta)]
+        y_t[i] = (0.29690 * np.sqrt(xx[i]) - 0.12600 * xx[i] - 0.35160 * xx[i]**2 +
+                 0.28430 * xx[i]**3 - 0.10150 * xx[i]**4) * t / 0.20
 
-        xl = [xx + yy * np.sin(zz) for xx, yy, zz in zip(x, yt, theta)]
-        yl = [xx - yy * np.cos(zz) for xx, yy, zz in zip(zc, yt, theta)]
+        if xx[i] < m:
+            y_c[i] = (c / 6.0) * (xx[i]**3 - 3.0 * m * xx[i]**2 + m**2 * (3.0 - m) * xx[i])
+        else:
+            y_c[i] = (c / 6.0) * m**3 * (1.0 - xx[i])
 
-    X = xu[::-1] + xl[1:]
-    Z = yu[::-1] + yl[1:]
+    ib = 0
+    for i in range(n - 1, -1, -1):
+        ib += 1
+        x[ib] = xx[i]
+        y[ib] = y_c[i] + y_t[i]
 
-    return X, Z
+    for i in range(1, n):
+        ib += 1
+        x[ib] = xx[i]
+        y[ib] = y_c[i] - y_t[i]
+
+
+    return x[1:], y[1:]
 
 
 def thickness_wennerstrom(
