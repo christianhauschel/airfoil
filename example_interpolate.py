@@ -19,7 +19,7 @@ afs = [Airfoil.naca(name) for name in names]
 
 span = np.linspace(0, 1, len(afs))
 span_int = np.linspace(0, 1, 30)
-afs_int = interpolate_airfoils(afs, span_int, span, plot_debug=True, kind="linear")
+afs_int = interpolate_airfoils(afs, span_int, span, plot_debug=False, kind="linear")
 
 # get chord of all interpolated airfoils
 chords = [af.chord for af in afs_int]

@@ -153,4 +153,4 @@ def interpolate_airfoils(
 
         plt.show()
 
-        return [Airfoil(data_int[i]) for i in range(n_int)]
+    return [Airfoil(data_int[i]) for i in range(n_int)]
