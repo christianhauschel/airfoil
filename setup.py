@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="airfoil",
-    version="0.6.1",
+    version="0.6.2",
     description="Just another airfoil manipulation package",
     packages=["airfoil"],
     author="Christian Hauschel",

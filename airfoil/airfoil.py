@@ -1,7 +1,6 @@
 """Main airfoil class.
 """
 
-
 import contextlib
 import itertools
 import numpy as np
@@ -120,7 +119,6 @@ class Airfoil:
             obj = load(f)
         return obj
 
-
     @classmethod
     def load_txt(
         cls,
@@ -154,7 +152,7 @@ class Airfoil:
             else:
                 name = str(Path(fname).name)
         return cls(data, name=name, order=order, spacing=spacing, **kwargs)
-    
+
     @classmethod
     def load_csv(
         cls,
@@ -185,7 +183,7 @@ class Airfoil:
         y = df["y"].values
         data = np.c_[x, y]
         name = df["name"].values[0]
-        
+
         return cls(data, name=name, order=order, spacing=spacing, **kwargs)
 
     @classmethod
@@ -354,8 +352,7 @@ class Airfoil:
         else:
             x, y = naca5(number, n_lower, finite_TE, spacing, **kwargs)
 
-        return cls(np.c_[x * chord, y * chord],  name=f"NACA{number}")
- 
+        return cls(np.c_[x * chord, y * chord], name=f"NACA{number}")
 
     @classmethod
     def ellipse(cls, a=0.5, b=0.5, n=241, name=None, spacing="cosine", **kwargs):
@@ -1261,7 +1258,7 @@ class Airfoil:
             ".-",
             lw=1,
             c="tab:red",
-            s=2,
+            markersize=2,
             label="upper",
         )
         ax.plot(
@@ -1270,7 +1267,7 @@ class Airfoil:
             ".-",
             lw=1,
             c="tab:blue",
-            s=2,
+            markersize=2,
             label="lower",
         )
         ax.plot(
@@ -1317,6 +1314,38 @@ class Airfoil:
         if fname is not None:
             fig.savefig(fname, dpi=dpi)
 
+    @staticmethod
+    def _rotate_data(data, angle, origin=(0, 0)):
+        n = len(data)
+        R = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+
+        # remove origin
+        data[0, :] -= origin[0]
+        data[1, :] -= origin[1]
+
+        # rotate
+        for i in range(n):
+            data[i, :] = R.dot(data[i, :])
+
+        # add origin
+        data[0, :] += origin[0]
+        data[1, :] += origin[1]
+
+        return data
+
+    def rotate(self, angle, origin=(0, 0)):
+        """Rotates the airfoil.
+
+        Parameters
+        ----------
+        angle : float
+            angle in radians
+        origin : tuple, optional
+            origin of rotation, by default (0, 0)
+        """
+        self.data = self._rotate_data(self.data, angle, origin)
+        self._recompute()
+
     def _unitize(self, order=2, spacing="cosine", n_correction=10, **kwargs):
         """De-rotates the airfoil."""
         self._recompute()
@@ -1345,14 +1374,7 @@ class Airfoil:
         twist = -np.arctan2(dy, dx)
 
         # Rotate the Airfoil
-        R = np.array(
-            [
-                [np.cos(twist), -np.sin(twist)],
-                [np.sin(twist), np.cos(twist)],
-            ]
-        )
-        for i in range(len(airfoil)):
-            airfoil[i, :] = R.dot(airfoil[i, :])
+        airfoil = self._rotate_data(airfoil, twist)
 
         TE_new = (airfoil[0, :] + airfoil[-1, :]) / 2.0
 
@@ -1428,15 +1450,19 @@ class Airfoil:
 
     def close_TE(self) -> None:
         """Closes the TE to get a numerically clean airfoil."""
-        if self.upper[0, 0] != self._chord or self.lower[0, 1] != 0.0:
-            self.data[0, 0] = self._chord
-            self.data[0, 1] = 0.0
-        if self.lower[-1, 0] != self._chord or self.lower[-1, 1] != 0.0:
-            self.data[-1, 0] = self._chord
-            self.data[-1, 1] = 0.0
+        TE = self.TE
+        if self.upper[0, 0] != TE[0]:
+            self.data[0, 0] = TE[0]
+        if self.upper[0, 1] != TE[1]:
+            self.data[0, 1] = TE[1]
+        if self.lower[-1, 0] != TE[0]:
+            self.data[-1, 0] = TE[0]
+        if self.lower[-1, 1] != TE[1]:
+            self.data[-1, 1] = TE[1]
+
 
     def round_TE(
-        self, n_pts=20, distance=0.4, order=4, check_geometry=True, n_correction=10
+        self, n_pts=20, distance=0.49, order=4, check_geometry=True, n_correction=10
     ):
         """Rounds and closes the TE using a spline. Initial airfoil must be blunt!
 
@@ -1464,7 +1490,7 @@ class Airfoil:
         coeff = np.zeros((order + 1, 2))
         for ii in [0, -1]:
             coeff[ii] = self.s_airfoil.evaluate(np.abs(ii))
-            dX_ds = self.s_airfoil.derivative(np.abs(ii))
+            dX_ds = self.s_airfoil.evaluate(np.abs(ii), derivative=1)
             dy_dx = dX_ds[1] / dX_ds[0]
 
             coeff[3 * ii + 1] = np.array(
@@ -1487,8 +1513,8 @@ class Airfoil:
 
         # Combine Curves
         upper_curve, lower_curve = te_curve.split(0.5)
-        t_lower = np.linspace(1.0, 0.5, n_pts)
-        t_upper = np.linspace(0.5, 0.0, n_pts)
+        t_lower = np.linspace(lower_curve.end, lower_curve.start, n_pts)
+        t_upper = np.linspace(upper_curve.end, upper_curve.start, n_pts)
         pts_lower = lower_curve.evaluate(t_lower)
         pts_upper = upper_curve.evaluate(t_upper)
 
@@ -1497,7 +1523,9 @@ class Airfoil:
                 pts_upper[:, 1] > pts_lower[:, 1]
             ), "Distance too big! (upper < lower)"
 
-            upper_derivatves = upper_curve.derivative(np.linspace(0.0, 0.5, n_pts))
+            upper_derivatves = upper_curve.evaluate(
+                np.linspace(0.0, 0.5, n_pts), derivative=1
+            )
             dy_dx_upper = upper_derivatves[:, 1] / upper_derivatves[:, 0]
 
             assert strictly_decreasing(
