@@ -11,7 +11,7 @@ try:
 except:
     import matplotlib.pyplot as plt
 from scipy.interpolate.interpolate import interp1d
-from scipy.interpolate import splrep, splev
+from scipy.interpolate import PchipInterpolator, splrep, splev
 from scipy.spatial import distance
 from .airfoiltypes import *
 from .geometry import *
@@ -97,14 +97,187 @@ class Airfoil:
         self.s_lower = Spline(self.lower)
 
     def normalize(self):
-        """Normalizes the airfoil (chord = 1)."""
-        self.data /= self._chord
+        """Normalizes the airfoil (LE = [0, 0], TE = [1, 0])."""
+        TE = self.TE
+        LE, id_LE = self._find_LE(self.data, TE)
+        chord_vec = TE - LE
+        chord = np.linalg.norm(chord_vec)
+
+        if chord == 0.0:
+            raise ValueError("Cannot normalize an airfoil with zero chord.")
+
+        data = np.array(self.data, dtype=float, copy=True)
+        data -= LE
+
+        angle = -np.arctan2(chord_vec[1], chord_vec[0])
+        R = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+        data = data @ R.T
+        data /= chord
+
+        data[id_LE] = np.array([0.0, 0.0])
+        data[[0, -1], 0] = 1.0
+        y_TE_gap = data[0, 1] - data[-1, 1]
+        data[0, 1] = 0.5 * y_TE_gap
+        data[-1, 1] = -data[0, 1]
+
+        self.data = data
         self._chord = 1.0
         self._recompute()
 
     def copy(self):
         """Returns a copy of the airfoil."""
         return copy(self)
+
+    @staticmethod
+    def _normalize_txt_format(format: str) -> str:
+        aliases = {
+            "auto": "auto",
+            "selig": "selig",
+            "s": "selig",
+            "lednicer": "lednicer",
+            "l": "lednicer",
+        }
+        try:
+            return aliases[format.lower()]
+        except KeyError:
+            raise ValueError("format must be one of: 'auto', 'selig', 'lednicer'")
+
+    @staticmethod
+    def _parse_numeric_pair(line: str):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            return None
+
+        parts = line.replace(",", " ").split()
+        if len(parts) < 2:
+            return None
+
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+
+    @classmethod
+    def _detect_txt_format(cls, lines, skiprows: int) -> str:
+        content = lines[skiprows:]
+        coords = []
+
+        for i, line in enumerate(content):
+            pair = cls._parse_numeric_pair(line)
+            if pair is None:
+                continue
+            coords.append(pair)
+
+            counts = np.array(pair)
+            if np.all(counts >= 2.0) and np.allclose(counts, np.round(counts)):
+                n_upper, n_lower = np.round(counts).astype(int)
+                coords = [
+                    row
+                    for row in (cls._parse_numeric_pair(line) for line in content[i + 1 :])
+                    if row is not None
+                ]
+                if len(coords) >= n_upper + n_lower:
+                    return "lednicer"
+
+            break
+
+        coords = [
+            row
+            for row in (cls._parse_numeric_pair(line) for line in content)
+            if row is not None
+        ]
+        if len(coords) > 2:
+            x = np.asarray(coords)[:, 0]
+            if x[1] > x[0] and np.any(np.diff(x) < 0.0):
+                return "lednicer"
+
+        if coords:
+            return "selig"
+
+        return "selig"
+
+    @staticmethod
+    def _lednicer_to_selig_data(upper, lower):
+        upper = np.asarray(upper, dtype=float)
+        lower = np.asarray(lower, dtype=float)
+
+        if np.allclose(upper[0], lower[0]):
+            lower = lower[1:]
+
+        return np.vstack((np.flipud(upper), lower))
+
+    @staticmethod
+    def _selig_to_lednicer_data(data):
+        i_LE = np.argmin(data[:, 0])
+        upper = np.flipud(data[: i_LE + 1])
+        lower = data[i_LE:]
+        if len(lower) > 1 and np.allclose(lower[0], lower[1]):
+            lower = lower[1:]
+        return upper, lower
+
+    @classmethod
+    def _load_selig_txt(cls, fname: str, skiprows: int):
+        data = np.loadtxt(fname, skiprows=skiprows)
+        data = np.atleast_2d(data)
+        return data[:, :2]
+
+    @classmethod
+    def _load_lednicer_txt(cls, lines, skiprows: int):
+        content = lines[skiprows:]
+
+        count_idx = None
+        counts = None
+        for i, line in enumerate(content):
+            pair = cls._parse_numeric_pair(line)
+            if pair is None:
+                continue
+
+            values = np.array(pair)
+            if np.all(values >= 2.0) and np.allclose(values, np.round(values)):
+                count_idx = i
+                counts = np.round(values).astype(int)
+                break
+
+            break
+
+        if count_idx is None:
+            coords = np.asarray(
+                [
+                    row
+                    for row in (cls._parse_numeric_pair(line) for line in content)
+                    if row is not None
+                ],
+                dtype=float,
+            )
+            if len(coords) < 2:
+                raise ValueError("Could not split Lednicer upper/lower point blocks")
+
+            split = np.where(np.diff(coords[:, 0]) < 0.0)[0]
+            if len(split) == 0:
+                raise ValueError("Could not split Lednicer upper/lower point blocks")
+
+            i_lower = split[0] + 1
+            return cls._lednicer_to_selig_data(coords[:i_lower], coords[i_lower:])
+
+        coords = [
+            row
+            for row in (
+                cls._parse_numeric_pair(line) for line in content[count_idx + 1 :]
+            )
+            if row is not None
+        ]
+        n_upper, n_lower = counts
+
+        if len(coords) < n_upper + n_lower:
+            raise ValueError(
+                f"Lednicer file declares {n_upper + n_lower} points, "
+                f"but only {len(coords)} coordinate rows were found"
+            )
+
+        coords = np.asarray(coords[: n_upper + n_lower], dtype=float)
+        upper = coords[:n_upper]
+        lower = coords[n_upper:]
+        return cls._lednicer_to_selig_data(upper, lower)
 
     @classmethod
     def load_obj(cls, fname: str):
@@ -127,6 +300,7 @@ class Airfoil:
         skiprows: int = 1,
         order: int = 1,
         spacing: str = "cosine",
+        format: str = "auto",
         **kwargs,
     ):
         """
@@ -137,18 +311,30 @@ class Airfoil:
         fname: str
         name: str, optional
         skiprows: int, optional
+        format: str, optional
+            Airfoil coordinate format: "auto", "selig", or "lednicer".
 
         Conventions
         -----------
         - The airfoil begins at TE and moves along the upper surface
           counter-clockwise to the pressure side until it reaches again the TE.
         """
-        data = np.loadtxt(fname, skiprows=skiprows)
+        txt_format = cls._normalize_txt_format(format)
+
+        with open(fname) as f:
+            lines = f.readlines()
+
+        if txt_format == "auto":
+            txt_format = cls._detect_txt_format(lines, skiprows)
+
+        if txt_format == "lednicer":
+            data = cls._load_lednicer_txt(lines, skiprows)
+        else:
+            data = cls._load_selig_txt(fname, skiprows)
 
         if name is None:
             if skiprows > 0:
-                with open(fname) as f:
-                    name = str(f.readline().strip().replace("# ", "").replace("#", ""))
+                name = str(lines[0].strip().replace("# ", "").replace("#", ""))
             else:
                 name = str(Path(fname).name)
         return cls(data, name=name, order=order, spacing=spacing, **kwargs)
@@ -997,15 +1183,34 @@ class Airfoil:
 
         self.data = data[:, 0:2]
 
-    def save_txt(self, fname: str):
+    def save_txt(self, fname: str, format: str = "selig", fmt: str = "%.18e"):
         """Save airfoil data to disc.
 
         Parameters
         ----------
         fname : str
             fname
+        format : str, optional
+            Airfoil coordinate format: "selig" or "lednicer", by default "selig".
+        fmt : str, optional
+            Numeric format passed to numpy.savetxt, by default "%.18e".
         """
-        np.savetxt(fname, self.data, header=self.name, comments="")
+        txt_format = self._normalize_txt_format(format)
+        if txt_format == "auto":
+            txt_format = "selig"
+
+        if txt_format == "selig":
+            np.savetxt(fname, self.data, header=self.name, comments="", fmt=fmt)
+            return
+
+        upper, lower = self._selig_to_lednicer_data(self.data)
+
+        with open(fname, "w") as f:
+            f.write(f"{self.name}\n")
+            f.write(f"{len(upper)} {len(lower)}\n\n")
+            np.savetxt(f, upper, fmt=fmt)
+            f.write("\n")
+            np.savetxt(f, lower, fmt=fmt)
 
     def save_csv(self, fname: str):
         """Save airfoil data to disc.
@@ -1086,6 +1291,70 @@ class Airfoil:
         y = splev(x, tck)
         return np.transpose(np.array([x, y]))
 
+    @staticmethod
+    def _prepare_surface_for_interpolation(surface):
+        surface = np.asarray(surface, dtype=float)
+        surface = surface[np.argsort(surface[:, 0], kind="stable")]
+
+        x = []
+        y = []
+        for x_i in np.unique(surface[:, 0]):
+            mask = surface[:, 0] == x_i
+            x.append(x_i)
+            y.append(np.mean(surface[mask, 1]))
+
+        return np.asarray(x), np.asarray(y)
+
+    @staticmethod
+    def _smoothing_strength(smoothing):
+        if smoothing is None or smoothing is False:
+            return 0.0
+        if smoothing is True:
+            return 0.25
+
+        strength = float(smoothing)
+        if strength < 0.0:
+            raise ValueError("smoothing must be >= 0")
+
+        return min(strength, 1.0)
+
+    @staticmethod
+    def _smooth_spline(x, y, order, smoothing, coordinate=None):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+
+        order = min(max(order, 2), len(x) - 1)
+        strength = Airfoil._smoothing_strength(smoothing)
+
+        if strength == 0.0:
+            return splrep(x, y, k=order, s=0)
+
+        y_range = np.ptp(y)
+        if y_range == 0.0:
+            y_range = 1.0
+
+        rms_tolerance = strength * 0.12 * y_range
+        smoothing_factor = len(x) * rms_tolerance**2
+
+        if coordinate is None:
+            coordinate = x
+        coordinate = np.asarray(coordinate, dtype=float)
+        coordinate_range = coordinate[-1] - coordinate[0]
+        if coordinate_range == 0.0:
+            coordinate_norm = np.zeros_like(coordinate)
+        else:
+            coordinate_norm = (coordinate - coordinate[0]) / coordinate_range
+
+        weights = (
+            1.0
+            + 50.0 * np.exp(-((coordinate_norm / 0.12) ** 2))
+            + 20.0 * np.exp(-(((1.0 - coordinate_norm) / 0.08) ** 2))
+        )
+        weights[0] = 1e4
+        weights[-1] = 1e4
+
+        return splrep(x, y, w=weights, k=order, s=smoothing_factor)
+
     def _refine(
         self,
         upper_raw,
@@ -1098,43 +1367,43 @@ class Airfoil:
         **kwargs,
     ):
         n_lower = int((n - 1) / 2) + 1
-        n_upper = n_lower
 
-        # refine upper
-        x = sampling(spacing, self._chord, 0.0, n_upper, **kwargs)
+        upper_x, upper_y = self._prepare_surface_for_interpolation(upper_raw)
+        lower_x, lower_y = self._prepare_surface_for_interpolation(lower_raw)
 
-        upper_raw = np.flip(upper_raw, axis=0)
+        upper_interp = PchipInterpolator(upper_x, upper_y)
+        lower_interp = PchipInterpolator(lower_x, lower_y)
 
-        if not strictly_monotonic(upper_raw[:, 0]):
-            upper_raw[-n_correction:, 0] = np.linspace(
-                upper_raw[-n_correction, 0], upper_raw[-1, 0], n_correction
-            )
+        x_fit = np.unique(np.concatenate((upper_x, lower_x)))
+        upper_fit = upper_interp(x_fit)
+        lower_fit = lower_interp(x_fit)
 
-            fig, ax = plt.subplots()
-            ax.plot(upper_raw[:, 0], upper_raw[:, 1], ".-")
-            ax.plot(lower_raw[:, 0], lower_raw[:, 1], ".-")
-            ax.set_aspect("equal")
-            plt.show()
-            # raise Warning(f"upper_raw_x is not strictly monotonic! {upper_raw}")
-        if not strictly_monotonic(lower_raw[:, 0]):
-            lower_raw[-n_correction:, 0] = np.linspace(
-                lower_raw[-n_correction, 0], lower_raw[-1, 0], n_correction
-            )
+        camber = 0.5 * (upper_fit + lower_fit)
+        half_thickness = np.maximum(0.5 * (upper_fit - lower_fit), 0.0)
+        r_fit = np.sqrt(np.maximum(x_fit, 0.0))
 
-            fig, ax = plt.subplots()
-            ax.plot(upper_raw[:, 0], upper_raw[:, 1], ".-")
-            ax.plot(lower_raw[:, 0], lower_raw[:, 1], ".-")
-            ax.set_aspect("equal")
-            plt.show()
-            # raise Warning(f"lower_raw_x is not strictly monotonic! {lower_raw}")
+        tck_camber = self._smooth_spline(
+            x_fit, camber, order, smoothing, coordinate=x_fit
+        )
+        tck_thickness = self._smooth_spline(
+            r_fit, half_thickness, order, smoothing, coordinate=r_fit
+        )
 
-        tck = self._get_spline(upper_raw, order, s=smoothing)
-        upper = self._get_coords(tck, x)
-
-        # refine lower
         x = sampling(spacing, 0.0, self._chord, n_lower, **kwargs)
-        tck = self._get_spline(lower_raw, order, s=smoothing)
-        lower = self._get_coords(tck, x)
+        r = np.sqrt(np.maximum(x, 0.0))
+
+        camber = splev(x, tck_camber)
+        half_thickness = np.maximum(splev(r, tck_thickness), 0.0)
+
+        upper = np.c_[x, camber + half_thickness]
+        lower = np.c_[x, camber - half_thickness]
+
+        upper[0] = np.array([0.0, 0.0])
+        lower[0] = np.array([0.0, 0.0])
+        upper[-1] = np.array([self._chord, upper_y[-1]])
+        lower[-1] = np.array([self._chord, lower_y[-1]])
+
+        upper = np.flipud(upper)
 
         return upper, lower
 
@@ -1154,9 +1423,13 @@ class Airfoil:
         n : int
             number of points (odd number!)
         order : int
-            interpolation spline order
+            interpolation spline order. Order 2 gives C1 continuity at the leading
+            edge; order 3 or higher gives C2 continuity.
         spacing : str, optional
             spacing method for points: "cosine" or "linear", by default "cosine"
+        smoothing : float or bool, optional
+            Dimensionless smoothing strength in [0, 1]. 0 interpolates the input
+            coordinates, 1 applies strong smoothing. True is equivalent to 0.25.
         """
         assert n % 2, "n must be odd!"
 
@@ -1181,7 +1454,13 @@ class Airfoil:
         data_refined = np.concatenate((upper[:-1], [[0, 0]], lower[1:]))
 
         self.data = data_refined
-        self._unitize(order=order, spacing=spacing, n_correction=n_correction, **kwargs)
+        self._unitize(
+            order=order,
+            spacing=spacing,
+            smoothing=smoothing,
+            n_correction=n_correction,
+            **kwargs,
+        )
         self._recompute()
 
     def thicken(
@@ -1346,7 +1625,9 @@ class Airfoil:
         self.data = self._rotate_data(self.data, angle, origin)
         self._recompute()
 
-    def _unitize(self, order=2, spacing="cosine", n_correction=10, **kwargs):
+    def _unitize(
+        self, order=2, spacing="cosine", smoothing=0, n_correction=10, **kwargs
+    ):
         """De-rotates the airfoil."""
         self._recompute()
 
@@ -1390,6 +1671,7 @@ class Airfoil:
             n=n_0,
             order=order,
             spacing=spacing,
+            smoothing=smoothing,
             n_correction=n_correction,
             **kwargs,
         )

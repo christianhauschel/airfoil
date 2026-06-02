@@ -1,29 +1,27 @@
 # %% Imports
 
-from airfoil import Airfoil
-import numpy as np
+from airfoil import Airfoil, plot_airfoils
+from copy import copy
 
-# %% Example 1: NACA4 and CSV-Files
+af_base = Airfoil.load_txt("data/fauvel_14_base.dat")
 
-af = Airfoil.naca("4412", finite_TE=True)
-af.normalize()
-# af.plot(show=True)
+af_refined = copy(af_base)
+af_refined.refine(n=241, smoothing=0.01)
+af_refined.normalize()
 
-af.save_csv(f"data/{af.name}.csv")
+af_refined.name = "Fauvel 14 (refined)"
+af_refined.save_txt("data/fauvel_14_refined.dat")
 
-af1 = Airfoil.load_csv(f"data/{af.name}.csv")
-# af1.plot(show=True)
+af_refined_TE = copy(af_refined)
 
-af1.add_TE_thickness(0.03)
-# af1.rotate(np.radians(20))
+af_refined_TE.add_TE_thickness(0.004)
+af_refined_TE.normalize()
+af_refined_TE.name = "Fauvel 14 (refined, TE=0.004)"
+
+plot_airfoils([af_base, af_refined, af_refined_TE], show=True)
 
 
-af1.round_TE()
-# print(af1.TE)
-af1.normalize()
-af1.refine(241)
-af1.plot(show=True, fname="test.svg") 
-# af1.plot(show=False, fname="test.svg") 
+af_refined_TE.save_txt("data/fauvel_14_refined_TE.dat")
 
 
 # %%

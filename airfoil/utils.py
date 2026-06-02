@@ -46,7 +46,7 @@ def plot_airfoils(
     height = width / fct_size + min(1, space)
     fig.set_size_inches(width, height)
 
-    ax.format(
+    ax.set(
         title="Airfoil Comparison",
         aspect="equal",
         xlim=[-0.01 * chord_max, 1.01 * chord_max],
